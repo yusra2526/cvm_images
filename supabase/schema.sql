@@ -5,9 +5,3 @@ alter table profiles enable row level security; alter table cephalograms enable 
 create policy "reviewers read images" on cephalograms for select to authenticated using (true);
 create policy "reviewers manage own reviews" on reviews for all to authenticated using (reviewer_id = auth.uid()) with check (reviewer_id = auth.uid());
 create policy "users read own profile" on profiles for select to authenticated using (id = auth.uid());
-
-create or replace function public.is_admin() returns boolean language sql stable security definer set search_path = public as $$ select exists (select 1 from public.profiles where id = auth.uid() and role = 'admin' and active = true); $$;
-create policy "admins read all profiles" on profiles for select to authenticated using (public.is_admin());
-create policy "admins manage images" on cephalograms for all to authenticated using (public.is_admin()) with check (public.is_admin());
-create policy "admins read all reviews" on reviews for select to authenticated using (public.is_admin());
-insert into storage.buckets (id, name, public) values ('cephalograms', 'cephalograms', false) on conflict (id) do nothing;create policy "authenticated read cephalogram objects" on storage.objects for select to authenticated using (bucket_id = 'cephalograms');
