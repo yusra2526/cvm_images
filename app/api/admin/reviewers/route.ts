@@ -1,34 +1,37 @@
+import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/supabase-admin';
+import { handle, HttpError, requireAdmin } from '@/lib/auth';
+import { hashPassword, withDb, type StoredUser } from '@/lib/store';
 
 export async function POST(request: Request) {
-  try {
-    const { admin } = await requireAdmin(request);
+  return handle(async () => {
+    await requireAdmin();
     const body = await request.json();
     const email = String(body.email || '').trim().toLowerCase();
     const password = String(body.password || '');
-    if (!email || password.length < 6) return NextResponse.json({ error: 'Valid email and 6+ character password required.' }, { status: 400 });
-    const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
-    if (error || !data.user) return NextResponse.json({ error: error?.message || 'Could not create reviewer.' }, { status: 400 });
-    const { error: profileError } = await admin.from('profiles').insert({ id: data.user.id, email, role: 'reviewer', active: true });
-    if (profileError) return NextResponse.json({ error: profileError.message }, { status: 400 });
-    return NextResponse.json({ id: data.user.id, email });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unauthorized' }, { status: 401 });
-  }
+    if (!email || password.length < 6) throw new HttpError(400, 'Valid email and 6+ character password required.');
+    const user = await withDb((db) => {
+      if (db.users.some((item) => item.email === email)) throw new HttpError(400, 'A user with this email already exists.');
+      const created: StoredUser = { id: crypto.randomUUID(), email, role: 'reviewer', active: true, created_at: new Date().toISOString(), password: hashPassword(password) };
+      db.users.push(created);
+      return created;
+    }, true);
+    return NextResponse.json({ id: user.id, email: user.email });
+  });
 }
 
 export async function PATCH(request: Request) {
-  try {
-    const { admin } = await requireAdmin(request);
+  return handle(async () => {
+    await requireAdmin();
     const body = await request.json();
     const userId = String(body.userId || '');
     const password = String(body.password || '');
-    if (!userId || password.length < 6) return NextResponse.json({ error: 'User and 6+ character password required.' }, { status: 400 });
-    const { error } = await admin.auth.admin.updateUserById(userId, { password });
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (!userId || password.length < 6) throw new HttpError(400, 'User and 6+ character password required.');
+    await withDb((db) => {
+      const user = db.users.find((item) => item.id === userId);
+      if (!user) throw new HttpError(404, 'User not found.');
+      user.password = hashPassword(password);
+    }, true);
     return NextResponse.json({ ok: true });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unauthorized' }, { status: 401 });
-  }
+  });
 }
