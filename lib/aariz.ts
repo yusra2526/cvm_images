@@ -1,11 +1,15 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { inflateRawSync } from 'node:zlib';
 
 // Official Aariz release on Figshare (CC BY 4.0): https://doi.org/10.6084/m9.figshare.27986417.v1
 // The archive is a single zip, so images are read straight out of it with HTTP range requests.
 const ARCHIVE_URL = process.env.AARIZ_ARCHIVE_URL || 'https://ndownloader.figshare.com/files/51041642';
-const CACHE_DIR = path.resolve(process.env.AARIZ_CACHE_DIR || path.join('data', 'aariz-cache'));
+// Serverless hosts (Vercel) only allow writes under the temp directory, and it is per instance.
+const CACHE_DIR = path.resolve(process.env.AARIZ_CACHE_DIR || (process.env.VERCEL ? path.join(os.tmpdir(), 'aariz-cache') : path.join('data', 'aariz-cache')));
+// Vercel rejects function responses over 4.5 MB, so larger images are re-encoded below this size.
+const MAX_RESPONSE_BYTES = process.env.VERCEL ? 4_000_000 : Infinity;
 const INDEX_FILE = path.join(CACHE_DIR, 'index.json');
 const SPLIT_ORDER: Record<string, number> = { train: 0, valid: 1, test: 2 };
 
@@ -78,12 +82,29 @@ export function getAarizIndex() {
       return JSON.parse(await fs.readFile(INDEX_FILE, 'utf8')) as AarizImage[];
     } catch {
       const index = await buildIndex();
-      await fs.mkdir(CACHE_DIR, { recursive: true });
-      await fs.writeFile(INDEX_FILE, JSON.stringify(index));
+      await writeCache(INDEX_FILE, JSON.stringify(index));
       return index;
     }
   })().catch((error) => { indexPromise = undefined; throw error; });
   return indexPromise;
+}
+
+async function writeCache(file: string, data: string | Buffer) {
+  try {
+    await fs.mkdir(CACHE_DIR, { recursive: true });
+    await fs.writeFile(file, data);
+  } catch (error) {
+    console.warn('Could not write Aariz cache:', error);
+  }
+}
+
+async function fitResponseLimit(body: Buffer, contentType: string) {
+  if (body.length <= MAX_RESPONSE_BYTES) return { body, contentType };
+  const sharp = (await import('sharp')).default;
+  // Lossless greyscale PNG first (cephalograms are greyscale stored as RGB), JPEG q95 as a last resort.
+  const png = await sharp(body).greyscale().png({ compressionLevel: 9 }).toBuffer();
+  if (png.length <= MAX_RESPONSE_BYTES) return { body: png, contentType: 'image/png' };
+  return { body: await sharp(body).greyscale().jpeg({ quality: 95 }).toBuffer(), contentType: 'image/jpeg' };
 }
 
 const inflight = new Map<number, Promise<{ body: Buffer; contentType: string }>>();
@@ -94,7 +115,7 @@ export async function getAarizImage(id: number) {
   const contentType = CONTENT_TYPES[image.file.split('.').pop()!.toLowerCase()] || 'application/octet-stream';
   const cachePath = path.join(CACHE_DIR, image.file);
   try {
-    return { body: await fs.readFile(cachePath), contentType };
+    return await fitResponseLimit(await fs.readFile(cachePath), contentType);
   } catch {
     // Not cached yet; download from the archive below.
   }
@@ -107,9 +128,8 @@ export async function getAarizImage(id: number) {
       const data = chunk.subarray(start, start + image.compressedSize);
       const body = image.method === 0 ? Buffer.from(data) : image.method === 8 ? inflateRawSync(data) : null;
       if (!body) throw new Error(`Unsupported compression method ${image.method}.`);
-      await fs.mkdir(CACHE_DIR, { recursive: true });
-      await fs.writeFile(cachePath, body);
-      return { body, contentType };
+      await writeCache(cachePath, body);
+      return fitResponseLimit(body, contentType);
     })().finally(() => inflight.delete(id)));
   }
   return inflight.get(id)!;

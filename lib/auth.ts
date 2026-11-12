@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { withDb, type StoredUser } from '@/lib/store';
+import { store, type StoredUser } from '@/lib/store';
 
 export const SESSION_COOKIE = 'cf_session';
 const SESSION_DAYS = 7;
@@ -26,12 +26,10 @@ export async function getSessionUser(): Promise<StoredUser | null> {
   if (!token) return null;
   const [userId, expires, signature] = token.split('.');
   if (!userId || !expires || !signature || Number(expires) < Date.now()) return null;
-  return withDb((db) => {
-    const expected = sign(`${userId}.${expires}`, db.secret);
-    if (expected.length !== signature.length || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) return null;
-    const user = db.users.find((item) => item.id === userId);
-    return user?.active ? user : null;
-  });
+  const expected = sign(`${userId}.${expires}`, await store.secret());
+  if (expected.length !== signature.length || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) return null;
+  const user = (await store.users()).find((item) => item.id === userId);
+  return user?.active ? user : null;
 }
 
 export async function requireUser() {
