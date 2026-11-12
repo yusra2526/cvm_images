@@ -21,15 +21,21 @@ Images are read directly from the official Aariz release on Figshare (`https://d
 
 ## Accounts and reviews
 
-Users (scrypt-hashed passwords) and reviews are stored in `data/ceph-fm.json`. Sessions use signed, HTTP-only cookies. Back up that file to keep reviewer progress.
+Users (scrypt-hashed passwords) and reviews are stored in Upstash Redis when `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` / `KV_REST_API_TOKEN`) are set. Otherwise they go in the local file `data/ceph-fm.json`. Sessions use signed, HTTP-only cookies.
 
-## Deployment
+## Deploying to Vercel
 
-Run it anywhere with a persistent disk (a VM, a container with a volume, or a local machine):
+1. In the Vercel project, open **Storage → Create → Upstash for Redis** (free tier is enough) and connect it to the project. This adds the Redis environment variables.
+2. Set `ADMIN_EMAIL`, `ADMIN_INITIAL_PASSWORD` and `SESSION_SECRET` (any long random string) in **Settings → Environment Variables**.
+3. Redeploy.
+
+On Vercel, images are cached per instance in `/tmp`. Images over Vercel's 4.5 MB response limit are re-encoded as greyscale PNG. This is lossless because the cephalograms are greyscale.
+
+## Self-hosting
+
+Any host with a persistent disk works without Redis:
 
 ```bash
 npm run build
 npm start
 ```
-
-Serverless hosts such as Vercel do not keep files between requests, so accounts and reviews would be lost there.

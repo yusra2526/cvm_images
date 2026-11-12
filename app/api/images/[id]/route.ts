@@ -3,6 +3,7 @@ import { handle, requireUser } from '@/lib/auth';
 import { getAarizImage } from '@/lib/aariz';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
   return handle(async () => {
